@@ -1,0 +1,40 @@
+{
+  "patient_info": {
+    "age": null,
+    "gender": null
+  },
+  "symptoms": [
+    "dry cough",
+    "chest discomfort",
+    "no fever",
+    "shortness"
+  ],
+  "medications": [
+    "milligrams"
+  ],
+  "procedures": [
+    "chest x-ray"
+  ],
+  "instructions": [
+    "Rest",
+    "Follow up"
+  ],
+  "diagnosis": [],
+  "other": [
+    "patient",
+    "persistent",
+    "days",
+    "patient",
+    "occasional",
+    "breath",
+    "Oxygen saturation",
+    "ordered",
+    "patient",
+    "prescribed",
+    "zythromycin",
+    "once daily",
+    "days",
+    "symptoms",
+    "worsen"
+  ]
+}
