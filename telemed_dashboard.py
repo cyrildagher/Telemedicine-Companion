@@ -7,6 +7,7 @@ from datetime import datetime
 import tempfile
 from src.transcriber import transcribe_audio
 from src.entity_extractor import extract_entities, categorize_entities
+from src.db_reader import get_session_ids, get_consultation_by_session, get_consultation_transcript, get_session_summary
 
 # --- Page config ---
 st.set_page_config(
@@ -89,8 +90,12 @@ if 'structured_data' not in st.session_state:
     st.session_state.structured_data = None
 if 'transcript' not in st.session_state:
     st.session_state.transcript = ""
-if 'current_patient' not in st.session_state:
-    st.session_state.current_patient = ""
+if 'current_session' not in st.session_state:
+    st.session_state.current_session = None
+if 'session_summary' not in st.session_state:
+    st.session_state.session_summary = None
+if 'patient_search' not in st.session_state:
+    st.session_state.patient_search = ""
 
 # --- Header ---
 st.markdown("""
@@ -100,76 +105,169 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- Patient Search & Selection ---
-st.markdown("### 🔍 Patient Search")
-col1, col2 = st.columns([3, 1])
-
-with col1:
-    patient_search = st.text_input(
-        "Enter patient name to load consultation data:",
-        placeholder="e.g., John Smith, Sarah Johnson...",
-        key="patient_search"
-    )
-
-with col2:
-    if st.button("🔍 Search Patient", type="primary"):
-        if patient_search.strip():
-            st.session_state.current_patient = patient_search.strip()
-            st.success(f"Loading data for {patient_search}...")
-            st.rerun()
-
-# --- Auto-load patient data when name is entered ---
-if st.session_state.current_patient:
-    st.markdown("---")
+# --- Sidebar with Session Selection ---
+with st.sidebar:
+    st.markdown("### 🗂️ Session Selection")
     
-    # Load sample data for demonstration
+    # Fetch session IDs from database
     try:
-        with open("transcripts/sample_transcript.txt", "r") as f:
-            sample_transcript = f.read()
+        session_ids = get_session_ids()
         
-        with open("transcripts/entities_structured.json", "r") as f:
-            sample_structured = json.load(f)
-        
-        # Update session state with loaded data
-        st.session_state.transcript = sample_transcript
-        st.session_state.structured_data = sample_structured
-        st.session_state.patient_info = {
-            "name": st.session_state.current_patient,
-            "age": "35",
-            "gender": "Female"
-        }
-        
-    except FileNotFoundError:
-        st.error("Sample data not found. Please ensure transcript files exist.")
-        st.stop()
-
-# --- Patient Information Display ---
-if st.session_state.patient_info["name"]:
-    st.markdown("---")
-    st.markdown("### 👤 Patient Information")
+        if session_ids:
+            # Session selection dropdown
+            selected_session = st.selectbox(
+                "Select a consultation session:",
+                options=[""] + session_ids,
+                index=0,
+                key="session_selector"
+            )
+            
+            if selected_session:
+                st.session_state.current_session = selected_session
+                
+                # Load session summary
+                summary = get_session_summary(selected_session)
+                if summary:
+                    st.session_state.session_summary = summary
+                    
+                    # Display session summary in sidebar
+                    st.markdown("### 📋 Session Summary")
+                    st.write(f"**Session ID:** {summary['session_id']}")
+                    st.write(f"**Date:** {summary['timestamp'].strftime('%Y-%m-%d %H:%M')}")
+                    st.write(f"**Age:** {summary['patient_age'] or 'Not set'}")
+                    st.write(f"**Gender:** {summary['patient_gender'] or 'Not set'}")
+                    
+                    # Entity counts
+                    st.markdown("### 📊 Entity Counts")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Symptoms", summary['symptoms_count'])
+                        st.metric("Medications", summary['medications_count'])
+                    with col2:
+                        st.metric("Procedures", summary['procedures_count'])
+                        st.metric("Diagnosis", summary['diagnosis_count'])
+                
+                # Load button
+                if st.button("📂 Load Session Data", type="primary"):
+                    if selected_session:
+                        with st.spinner("Loading session data..."):
+                            # Load consultation data
+                            consultation = get_consultation_by_session(selected_session)
+                            if consultation:
+                                st.session_state.structured_data = consultation["structured_data"]
+                                st.session_state.patient_info = {
+                                    "name": f"Patient ({selected_session})",
+                                    "age": consultation["structured_data"]["patient_info"]["age"],
+                                    "gender": consultation["structured_data"]["patient_info"]["gender"]
+                                }
+                            
+                            # Load transcript
+                            transcript = get_consultation_transcript(selected_session)
+                            st.session_state.transcript = transcript
+                            
+                            st.success(f"Session {selected_session} loaded successfully!")
+                            st.rerun()
+        else:
+            st.warning("No consultation sessions found in database.")
+            st.info("Please ensure the database is connected and contains consultation data.")
+            
+    except Exception as e:
+        st.error(f"Database connection error: {str(e)}")
+        st.info("Please check your MariaDB connection settings.")
     
-    # Patient info card
-    st.markdown(f"""
-    <div class="patient-card">
-        <h4>📋 {st.session_state.patient_info['name']}</h4>
-        <div style="display: flex; gap: 2rem; margin-top: 1rem;">
-            <div class="metric-card">
-                <h5>Age</h5>
-                <h3>{st.session_state.patient_info['age'] or '—'}</h3>
-            </div>
-            <div class="metric-card">
-                <h5>Gender</h5>
-                <h3>{st.session_state.patient_info['gender'] or '—'}</h3>
-            </div>
-            <div class="metric-card">
-                <h5>Consultation Date</h5>
-                <h3>{datetime.now().strftime('%m/%d/%Y')}</h3>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("---")
+    
+    # Quick Actions
+    st.markdown("### ⚙️ Quick Actions")
+    
+    if st.button("🆕 New Consultation", type="primary"):
+        st.session_state.clear()
+        st.rerun()
+    
+    if st.button("🔄 Refresh Sessions", type="secondary"):
+        st.rerun()
+    
+    st.markdown("---")
+    
+    # File upload for new data
+    st.markdown("### 📁 Upload New Data")
+    upload_option = st.radio("Input Method:", ["Audio File", "Transcript File", "Manual Entry"])
+    
+    if upload_option == "Audio File":
+        uploaded_audio = st.file_uploader("Upload audio", type=['mp3', 'wav', 'm4a'])
+        if uploaded_audio:
+            with st.spinner("Transcribing..."):
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_audio.name.split('.')[-1]}") as tmp_file:
+                        tmp_file.write(uploaded_audio.getvalue())
+                        tmp_file_path = tmp_file.name
+                    
+                    transcript_text = transcribe_audio(tmp_file_path)
+                    os.unlink(tmp_file_path)
+                    
+                    st.session_state.transcript = transcript_text
+                    st.success("Audio transcribed!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+    
+    elif upload_option == "Transcript File":
+        uploaded_file = st.file_uploader("Upload transcript", type=['txt'])
+        if uploaded_file:
+            st.session_state.transcript = uploaded_file.read().decode('utf-8')
+            st.success("Transcript loaded!")
+            st.rerun()
+    
+    elif upload_option == "Manual Entry":
+        manual_transcript = st.text_area("Enter transcript:", height=150)
+        if st.button("Process Manual Entry"):
+            if manual_transcript.strip():
+                st.session_state.transcript = manual_transcript
+                st.success("Transcript saved!")
+                st.rerun()
+    
+    st.markdown("---")
+    
+    # Settings
+    st.markdown("### 🔧 Settings")
+    model_size = st.selectbox("Whisper Model", ["tiny", "base", "small", "medium", "large"], index=1)
+    auto_extract = st.checkbox("Auto-extract entities", value=True)
+    
+    if st.button("🔄 Clear All Data"):
+        st.session_state.clear()
+        st.rerun()
 
 # --- Main Content Area ---
+if st.session_state.current_session:
+    st.markdown("---")
+    st.markdown(f"### 📋 Consultation Session: {st.session_state.current_session}")
+    
+    # Patient Information Display
+    if st.session_state.patient_info["name"]:
+        st.markdown("### 👤 Patient Information")
+        
+        # Patient info card
+        st.markdown(f"""
+        <div class="patient-card">
+            <h4>📋 {st.session_state.patient_info['name']}</h4>
+            <div style="display: flex; gap: 2rem; margin-top: 1rem;">
+                <div class="metric-card">
+                    <h5>Age</h5>
+                    <h3>{st.session_state.patient_info['age'] or '—'}</h3>
+                </div>
+                <div class="metric-card">
+                    <h5>Gender</h5>
+                    <h3>{st.session_state.patient_info['gender'] or '—'}</h3>
+                </div>
+                <div class="metric-card">
+                    <h5>Session ID</h5>
+                    <h3>{st.session_state.current_session}</h3>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+# --- Display Results ---
 if st.session_state.transcript and st.session_state.structured_data:
     col1, col2 = st.columns([1, 1])
     
@@ -188,7 +286,7 @@ if st.session_state.transcript and st.session_state.structured_data:
             st.download_button(
                 "📄 Download Transcript",
                 data=st.session_state.transcript,
-                file_name=f"transcript_{st.session_state.patient_info['name']}_{datetime.now().strftime('%Y%m%d')}.txt",
+                file_name=f"transcript_{st.session_state.current_session}_{datetime.now().strftime('%Y%m%d')}.txt",
                 mime="text/plain"
             )
         with col1b:
@@ -261,7 +359,7 @@ if st.session_state.structured_data:
         st.download_button(
             "⬇️ Download JSON",
             data=json.dumps(st.session_state.structured_data, indent=2),
-            file_name=f"consultation_{st.session_state.patient_info['name']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            file_name=f"consultation_{st.session_state.current_session}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
             mime="application/json"
         )
     
@@ -270,86 +368,15 @@ if st.session_state.structured_data:
             st.info("📊 Generating comprehensive medical report...")
     
     with col6:
-        if st.button("🔄 New Patient", type="secondary"):
+        if st.button("🔄 New Session", type="secondary"):
             st.session_state.clear()
             st.rerun()
-
-# --- Sidebar ---
-with st.sidebar:
-    st.markdown("### ⚙️ Quick Actions")
-    
-    if st.button("🆕 New Consultation", type="primary"):
-        st.session_state.clear()
-        st.rerun()
-    
-    st.markdown("---")
-    
-    st.markdown("### 📁 Upload New Data")
-    upload_option = st.radio("Input Method:", ["Audio File", "Transcript File", "Manual Entry"])
-    
-    if upload_option == "Audio File":
-        uploaded_audio = st.file_uploader("Upload audio", type=['mp3', 'wav', 'm4a'])
-        if uploaded_audio:
-            with st.spinner("Transcribing..."):
-                try:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_audio.name.split('.')[-1]}") as tmp_file:
-                        tmp_file.write(uploaded_audio.getvalue())
-                        tmp_file_path = tmp_file.name
-                    
-                    transcript_text = transcribe_audio(tmp_file_path)
-                    os.unlink(tmp_file_path)
-                    
-                    st.session_state.transcript = transcript_text
-                    st.success("Audio transcribed!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-    
-    elif upload_option == "Transcript File":
-        uploaded_file = st.file_uploader("Upload transcript", type=['txt'])
-        if uploaded_file:
-            st.session_state.transcript = uploaded_file.read().decode('utf-8')
-            st.success("Transcript loaded!")
-            st.rerun()
-    
-    elif upload_option == "Manual Entry":
-        manual_transcript = st.text_area("Enter transcript:", height=150)
-        if st.button("Process Manual Entry"):
-            if manual_transcript.strip():
-                st.session_state.transcript = manual_transcript
-                st.success("Transcript saved!")
-                st.rerun()
-    
-    st.markdown("---")
-    
-    st.markdown("### ℹ️ Session Info")
-    if st.session_state.patient_info["name"]:
-        st.write(f"**Patient:** {st.session_state.patient_info['name']}")
-        st.write(f"**Age:** {st.session_state.patient_info['age'] or 'Not set'}")
-        st.write(f"**Gender:** {st.session_state.patient_info['gender'] or 'Not set'}")
-        
-        if st.session_state.structured_data:
-            total_entities = sum(len(v) if isinstance(v, list) else 0 for v in st.session_state.structured_data.values())
-            st.write(f"**Entities Found:** {total_entities}")
-            st.write(f"**Last Updated:** {datetime.now().strftime('%H:%M:%S')}")
-    else:
-        st.info("No patient selected")
-    
-    st.markdown("---")
-    
-    st.markdown("### 🔧 Settings")
-    model_size = st.selectbox("Whisper Model", ["tiny", "base", "small", "medium", "large"], index=1)
-    auto_extract = st.checkbox("Auto-extract entities", value=True)
-    
-    if st.button("🔄 Clear All Data"):
-        st.session_state.clear()
-        st.rerun()
 
 # --- Footer ---
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #6c757d; padding: 1rem;">
-    <p>🩺 Telemedicine Consultation Review System | Built with Streamlit</p>
+    <p>🩺 Telemedicine Consultation Review System | Built with Streamlit & MariaDB</p>
     <p>Session: {}</p>
 </div>
 """.format(datetime.now().strftime('%B %d, %Y – %H:%M:%S')), unsafe_allow_html=True)
