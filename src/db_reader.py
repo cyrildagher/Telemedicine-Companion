@@ -93,23 +93,47 @@ def get_consultation_transcript(session_id):
         connection = get_db_connection()
         cursor = connection.cursor()
         
-        # Check if there's a transcripts table
-        query = "SELECT transcript FROM transcripts WHERE session_id = %s"
-        cursor.execute(query, (session_id,))
-        result = cursor.fetchone()
+        # First, try to check if there's a transcripts table
+        cursor.execute("SHOW TABLES LIKE 'transcripts'")
+        transcripts_table_exists = cursor.fetchone()
+        
+        if transcripts_table_exists:
+            # If transcripts table exists, try to get transcript
+            query = "SELECT transcript FROM transcripts WHERE session_id = %s"
+            cursor.execute(query, (session_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                cursor.close()
+                connection.close()
+                return result[0]
         
         cursor.close()
         connection.close()
         
-        if result:
-            return result[0]
-        
-        # If no transcript table, return a placeholder
-        return f"Transcript for session {session_id} - [Transcript data not available in database]"
+        # If no transcript table or no transcript found, try to load from sample file
+        try:
+            with open("transcripts/sample_transcript.txt", "r") as f:
+                sample_transcript = f.read()
+            return f"Sample transcript for session {session_id}:\n\n{sample_transcript}"
+        except FileNotFoundError:
+            # If no sample file, return a placeholder transcript
+            return f"""Consultation Transcript for Session {session_id}
+
+[Transcript data not available in database]
+
+This is a placeholder transcript for session {session_id}. 
+In a real implementation, the actual consultation transcript would be stored here.
+
+Patient consultation details have been extracted and are available in the medical entities section."""
         
     except Exception as e:
         print(f"Error fetching transcript: {e}")
-        return f"Transcript for session {session_id} - [Error loading transcript]"
+        return f"""Consultation Transcript for Session {session_id}
+
+[Error loading transcript: {str(e)}]
+
+Please check the database connection and transcript storage configuration."""
 
 def get_session_summary(session_id):
     """Get a summary of the session including patient info and entity counts"""
@@ -130,4 +154,84 @@ def get_session_summary(session_id):
         return None
     except Exception as e:
         print(f"Error getting session summary: {e}")
-        return None 
+        return None
+
+def search_sessions_by_patient(patient_search):
+    """Search sessions by patient information (age, gender, or session_id)"""
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+        
+        # Search in session_id, patient_age, or patient_gender
+        query = """
+            SELECT DISTINCT session_id, timestamp, patient_age, patient_gender
+            FROM consultations 
+            WHERE session_id LIKE %s 
+               OR patient_age LIKE %s 
+               OR patient_gender LIKE %s
+            ORDER BY timestamp DESC
+        """
+        
+        search_term = f"%{patient_search}%"
+        cursor.execute(query, (search_term, search_term, search_term))
+        results = cursor.fetchall()
+        
+        cursor.close()
+        connection.close()
+        
+        return results
+        
+    except Exception as e:
+        print(f"Error searching sessions: {e}")
+        return []
+
+def get_all_session_summaries():
+    """Get summaries of all sessions for search functionality"""
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+        
+        query = """
+            SELECT 
+                session_id,
+                timestamp,
+                patient_age,
+                patient_gender,
+                symptoms,
+                medications,
+                procedures,
+                diagnosis
+            FROM consultations 
+            ORDER BY timestamp DESC
+        """
+        
+        cursor.execute(query)
+        results = cursor.fetchall()
+        
+        summaries = []
+        for result in results:
+            # Count entities
+            symptoms_count = len(json.loads(result["symptoms"])) if result["symptoms"] else 0
+            medications_count = len(json.loads(result["medications"])) if result["medications"] else 0
+            procedures_count = len(json.loads(result["procedures"])) if result["procedures"] else 0
+            diagnosis_count = len(json.loads(result["diagnosis"])) if result["diagnosis"] else 0
+            
+            summaries.append({
+                "session_id": result["session_id"],
+                "timestamp": result["timestamp"],
+                "patient_age": result["patient_age"],
+                "patient_gender": result["patient_gender"],
+                "symptoms_count": symptoms_count,
+                "medications_count": medications_count,
+                "procedures_count": procedures_count,
+                "diagnosis_count": diagnosis_count
+            })
+        
+        cursor.close()
+        connection.close()
+        
+        return summaries
+        
+    except Exception as e:
+        print(f"Error getting session summaries: {e}")
+        return [] 

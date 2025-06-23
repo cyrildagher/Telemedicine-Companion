@@ -7,7 +7,7 @@ from datetime import datetime
 import tempfile
 from src.transcriber import transcribe_audio
 from src.entity_extractor import extract_entities, categorize_entities
-from src.db_reader import get_session_ids, get_consultation_by_session, get_consultation_transcript, get_session_summary
+from src.db_reader import get_session_ids, get_consultation_by_session, get_consultation_transcript, get_session_summary, search_sessions_by_patient, get_all_session_summaries
 
 # --- Page config ---
 st.set_page_config(
@@ -105,6 +105,56 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# --- Patient Search Section ---
+st.markdown("### 🔍 Patient Search")
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    patient_search = st.text_input(
+        "Search by patient information (session ID, age, gender):",
+        placeholder="e.g., consult_001, 35, Female...",
+        key="patient_search_input"
+    )
+
+with col2:
+    if st.button("🔍 Search Patient", type="primary"):
+        if patient_search.strip():
+            st.session_state.patient_search = patient_search.strip()
+            st.success(f"Searching for: {patient_search}")
+            st.rerun()
+
+# --- Display Search Results ---
+if st.session_state.patient_search:
+    st.markdown("---")
+    st.markdown("### 📋 Search Results")
+    
+    try:
+        search_results = search_sessions_by_patient(st.session_state.patient_search)
+        
+        if search_results:
+            st.success(f"Found {len(search_results)} matching sessions")
+            
+            # Display search results in a table
+            for i, result in enumerate(search_results):
+                with st.expander(f"Session: {result['session_id']} - {result['timestamp'].strftime('%Y-%m-%d %H:%M')}", expanded=False):
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.write(f"**Session ID:** {result['session_id']}")
+                    with col2:
+                        st.write(f"**Age:** {result['patient_age'] or 'Not set'}")
+                    with col3:
+                        st.write(f"**Gender:** {result['patient_gender'] or 'Not set'}")
+                    with col4:
+                        if st.button(f"📂 Load Session {i}", key=f"load_{result['session_id']}"):
+                            st.session_state.current_session = result['session_id']
+                            st.rerun()
+        else:
+            st.warning("No sessions found matching your search criteria.")
+            st.info("Try searching by session ID, age, or gender.")
+            
+    except Exception as e:
+        st.error(f"Search error: {str(e)}")
+
 # --- Sidebar with Session Selection ---
 with st.sidebar:
     st.markdown("### 🗂️ Session Selection")
@@ -166,6 +216,25 @@ with st.sidebar:
                             st.session_state.transcript = transcript
                             
                             st.success(f"Session {selected_session} loaded successfully!")
+                            st.rerun()
+            
+            # Recent Sessions section
+            st.markdown("---")
+            st.markdown("### 📅 Recent Sessions")
+            
+            # Get all session summaries for quick overview
+            all_summaries = get_all_session_summaries()
+            if all_summaries:
+                # Show last 5 sessions
+                recent_sessions = all_summaries[:5]
+                for summary in recent_sessions:
+                    with st.expander(f"{summary['session_id']} - {summary['timestamp'].strftime('%m/%d %H:%M')}", expanded=False):
+                        st.write(f"**Age:** {summary['patient_age'] or '—'}")
+                        st.write(f"**Gender:** {summary['patient_gender'] or '—'}")
+                        st.write(f"**Entities:** {summary['symptoms_count'] + summary['medications_count'] + summary['procedures_count'] + summary['diagnosis_count']}")
+                        
+                        if st.button(f"Load {summary['session_id']}", key=f"quick_load_{summary['session_id']}"):
+                            st.session_state.current_session = summary['session_id']
                             st.rerun()
         else:
             st.warning("No consultation sessions found in database.")
